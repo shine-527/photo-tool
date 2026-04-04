@@ -149,6 +149,57 @@ def generate_new_name(pattern: str, index: int, original: str) -> str:
     return pattern.format(n=index, name=stem, i=index)
 
 
+# ── 即時預覽 ────────────────────────────────────────────────
+
+def get_preview_image(path: str, settings: dict) -> "Image.Image | None":
+    """套用所有設定到單張圖片並回傳結果（不儲存），供即時預覽使用。"""
+    try:
+        img = Image.open(path)
+        img = _ensure_rgb(img)
+
+        if settings.get("resize_enabled"):
+            w = settings.get("resize_width", img.width)
+            h = settings.get("resize_height", img.height)
+            keep = settings.get("resize_keep_ratio", True)
+            img = resize_image(img.copy(), w, h, keep)
+
+        if settings.get("filter_enabled"):
+            img = apply_filters(
+                img,
+                brightness=settings.get("brightness", 1.0),
+                contrast=settings.get("contrast", 1.0),
+                saturation=settings.get("saturation", 1.0),
+                grayscale=settings.get("grayscale", False),
+            )
+
+        if settings.get("watermark_enabled"):
+            wm_type = settings.get("watermark_type", "text")
+            pos = settings.get("watermark_position", "右下")
+            opa = settings.get("watermark_opacity", 128)
+            if wm_type == "text":
+                img = add_text_watermark(
+                    img,
+                    text=settings.get("watermark_text", ""),
+                    position=pos,
+                    opacity=opa,
+                    font_size=settings.get("watermark_font_size", 36),
+                )
+            elif wm_type == "image":
+                wm_path = settings.get("watermark_image_path", "")
+                if wm_path and os.path.isfile(wm_path):
+                    img = add_image_watermark(
+                        img,
+                        watermark_path=wm_path,
+                        position=pos,
+                        opacity=opa,
+                        scale=settings.get("watermark_scale", 0.2),
+                    )
+
+        return img
+    except Exception:
+        return None
+
+
 # ── 主要處理流程 ─────────────────────────────────────────────
 
 def process_images(file_list: list, settings: dict, output_dir: str, progress_cb=None):
