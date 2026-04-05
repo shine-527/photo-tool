@@ -1,10 +1,37 @@
-"""圖片處理模組 — 縮放、壓縮、濾鏡、浮水印、格式轉換、重新命名"""
+"""圖片處理模組 — 縮放、壓縮、濾鏡、浮水印、邊框、格式轉換"""
 
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
+
+# ── 浮水印字體 ────────────────────────────────────────────────
+
+WATERMARK_FONTS: dict[str, str] = {
+    "微軟正黑體": "msyh.ttc",
+    "標楷體":     "kaiu.ttf",
+    "新細明體":   "mingliu.ttc",
+    "宋體":       "simsun.ttc",
+    "Arial":      "arial.ttf",
+    "Georgia":    "georgia.ttf",
+    "Impact":     "impact.ttf",
+    "Verdana":    "verdana.ttf",
+}
+
+# ── 邊框顏色 ─────────────────────────────────────────────────
+
+BORDER_COLORS: dict[str, tuple] = {
+    "黑":  (0,   0,   0),
+    "白":  (255, 255, 255),
+    "淺灰": (200, 200, 200),
+    "深灰": (80,  80,  80),
+    "米白": (245, 240, 230),
+    "深棕": (60,  40,  20),
+}
+
+
+# ── 工具 ─────────────────────────────────────────────────────
 
 def _ensure_rgb(img: Image.Image) -> Image.Image:
     """確保圖片為 RGB/RGBA 模式，方便後續處理。"""
@@ -53,18 +80,29 @@ _POSITION_MAP = {
     "居中": "center",
 }
 
+
 def _calc_position(base_size: tuple, wm_size: tuple, position: str, margin: int = 10) -> tuple:
     bw, bh = base_size
     ww, wh = wm_size
     pos = _POSITION_MAP.get(position, position)
     positions = {
-        "top_left": (margin, margin),
-        "top_right": (bw - ww - margin, margin),
-        "bottom_left": (margin, bh - wh - margin),
+        "top_left":     (margin, margin),
+        "top_right":    (bw - ww - margin, margin),
+        "bottom_left":  (margin, bh - wh - margin),
         "bottom_right": (bw - ww - margin, bh - wh - margin),
-        "center": ((bw - ww) // 2, (bh - wh) // 2),
+        "center":       ((bw - ww) // 2, (bh - wh) // 2),
     }
     return positions.get(pos, positions["bottom_right"])
+
+
+def _load_font(font_name: str, size: int) -> ImageFont.FreeTypeFont:
+    """依字體名稱嘗試載入，失敗則 fallback。"""
+    for candidate in [font_name, "arial.ttf"]:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 def add_text_watermark(
@@ -73,20 +111,14 @@ def add_text_watermark(
     position: str = "右下",
     opacity: int = 128,
     font_size: int = 36,
+    font_name: str = "msyh.ttc",
     color: tuple = (255, 255, 255),
 ) -> Image.Image:
     img = _ensure_rgb(img).convert("RGBA")
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    try:
-        font = ImageFont.truetype("msyh.ttc", font_size)
-    except OSError:
-        try:
-            font = ImageFont.truetype("arial.ttf", font_size)
-        except OSError:
-            font = ImageFont.load_default()
-
+    font = _load_font(font_name, font_size)
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x, y = _calc_position(img.size, (tw, th), position)
@@ -121,14 +153,62 @@ def add_image_watermark(
     return Image.alpha_composite(img, layer)
 
 
+# ── 邊框 ─────────────────────────────────────────────────────
+
+def add_border(
+    img: Image.Image,
+    width: int,
+    color: tuple = (0, 0, 0),
+    softness: int = 0,
+) -> Image.Image:
+    """
+    在圖片四周加上純色邊框，並可選擇柔化過渡。
+
+    - width: 邊框像素寬度
+    - color: (R, G, B) 邊框顏色
+    - softness: 羽化半徑（0=硬邊，>0=漸層融合）
+    """
+    if width <= 0:
+        return img
+
+    # 確保為 RGB（邊框不需要 alpha）
+    base = _ensure_rgb(img)
+    if base.mode == "RGBA":
+        base = base.convert("RGB")
+
+    new_w = base.width + width * 2
+    new_h = base.height + width * 2
+
+    canvas = Image.new("RGB", (new_w, new_h), color)
+    canvas.paste(base, (width, width))
+
+    if softness > 0:
+        # 建立羽化遮罩：中央白色（保留原圖），邊緣黑色（顯示邊框色）
+        mask = Image.new("L", (base.width, base.height), 255)
+
+        # 用 GaussianBlur 產生柔邊效果
+        # 先在遮罩邊緣設為 0，再模糊化，讓原圖邊緣漸漸淡出
+        edge_mask = Image.new("L", (base.width, base.height), 0)
+        inner_w = max(1, base.width - softness * 2)
+        inner_h = max(1, base.height - softness * 2)
+        inner = Image.new("L", (inner_w, inner_h), 255)
+        edge_mask.paste(inner, (softness, softness))
+        edge_mask = edge_mask.filter(ImageFilter.GaussianBlur(radius=softness * 0.6))
+
+        # 用遮罩將原圖合成到邊框畫布上
+        canvas.paste(base, (width, width), mask=edge_mask)
+
+    return canvas
+
+
 # ── 格式轉換 & 儲存 ─────────────────────────────────────────
 
 FORMAT_MAP = {
-    "JPG": "JPEG",
+    "JPG":  "JPEG",
     "JPEG": "JPEG",
-    "PNG": "PNG",
+    "PNG":  "PNG",
     "WEBP": "WEBP",
-    "BMP": "BMP",
+    "BMP":  "BMP",
 }
 
 
@@ -140,13 +220,6 @@ def save_image(img: Image.Image, output_path: str, fmt: str = "JPG", quality: in
     if pil_fmt in ("JPEG", "WEBP"):
         kwargs["quality"] = quality
     img.save(output_path, format=pil_fmt, **kwargs)
-
-
-# ── 批次重新命名 ─────────────────────────────────────────────
-
-def generate_new_name(pattern: str, index: int, original: str) -> str:
-    stem = Path(original).stem
-    return pattern.format(n=index, name=stem, i=index)
 
 
 # ── 即時預覽 ────────────────────────────────────────────────
@@ -183,6 +256,7 @@ def get_preview_image(path: str, settings: dict) -> "Image.Image | None":
                     position=pos,
                     opacity=opa,
                     font_size=settings.get("watermark_font_size", 36),
+                    font_name=settings.get("watermark_font", "msyh.ttc"),
                 )
             elif wm_type == "image":
                 wm_path = settings.get("watermark_image_path", "")
@@ -195,6 +269,14 @@ def get_preview_image(path: str, settings: dict) -> "Image.Image | None":
                         scale=settings.get("watermark_scale", 0.2),
                     )
 
+        if settings.get("border_enabled"):
+            img = add_border(
+                img,
+                width=settings.get("border_width", 20),
+                color=BORDER_COLORS.get(settings.get("border_color", "黑"), (0, 0, 0)),
+                softness=settings.get("border_softness", 0),
+            )
+
         return img
     except Exception:
         return None
@@ -206,7 +288,6 @@ def process_images(file_list: list, settings: dict, output_dir: str, progress_cb
     os.makedirs(output_dir, exist_ok=True)
     total = len(file_list)
 
-    # 嘗試註冊 HEIC 支援
     try:
         import pillow_heif
         pillow_heif.register_heif_opener()
@@ -218,14 +299,12 @@ def process_images(file_list: list, settings: dict, output_dir: str, progress_cb
             img = Image.open(filepath)
             img = _ensure_rgb(img)
 
-            # 縮放
             if settings.get("resize_enabled"):
                 w = settings.get("resize_width", img.width)
                 h = settings.get("resize_height", img.height)
                 keep = settings.get("resize_keep_ratio", True)
                 img = resize_image(img, w, h, keep)
 
-            # 濾鏡
             if settings.get("filter_enabled"):
                 img = apply_filters(
                     img,
@@ -235,7 +314,6 @@ def process_images(file_list: list, settings: dict, output_dir: str, progress_cb
                     grayscale=settings.get("grayscale", False),
                 )
 
-            # 浮水印
             if settings.get("watermark_enabled"):
                 wm_type = settings.get("watermark_type", "text")
                 pos = settings.get("watermark_position", "右下")
@@ -247,6 +325,7 @@ def process_images(file_list: list, settings: dict, output_dir: str, progress_cb
                         position=pos,
                         opacity=opa,
                         font_size=settings.get("watermark_font_size", 36),
+                        font_name=settings.get("watermark_font", "msyh.ttc"),
                     )
                 elif wm_type == "image":
                     wm_path = settings.get("watermark_image_path", "")
@@ -259,18 +338,18 @@ def process_images(file_list: list, settings: dict, output_dir: str, progress_cb
                             scale=settings.get("watermark_scale", 0.2),
                         )
 
-            # 輸出格式 & 檔名
+            if settings.get("border_enabled"):
+                img = add_border(
+                    img,
+                    width=settings.get("border_width", 20),
+                    color=BORDER_COLORS.get(settings.get("border_color", "黑"), (0, 0, 0)),
+                    softness=settings.get("border_softness", 0),
+                )
+
             out_fmt = settings.get("output_format", "JPG")
-            ext = out_fmt.lower() if out_fmt.upper() != "JPEG" else "jpg"
-
-            if settings.get("rename_enabled") and settings.get("rename_pattern"):
-                base = generate_new_name(settings["rename_pattern"], idx + 1, filepath)
-            else:
-                base = Path(filepath).stem
-
-            out_path = os.path.join(output_dir, f"{base}.{ext}")
-            quality = settings.get("quality", 85)
-            save_image(img, out_path, fmt=out_fmt, quality=quality)
+            ext = "jpg" if out_fmt.upper() == "JPG" else out_fmt.lower()
+            out_path = os.path.join(output_dir, f"{Path(filepath).stem}.{ext}")
+            save_image(img, out_path, fmt=out_fmt, quality=settings.get("quality", 85))
 
         except Exception as e:
             print(f"處理失敗: {filepath} — {e}")
