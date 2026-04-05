@@ -116,7 +116,7 @@ class App(tk.Tk):
         pane = ttk.PanedWindow(self, orient="horizontal")
         pane.pack(fill="both", expand=True, padx=8, pady=8)
 
-        # 左側：檔案列表
+        # 左欄：檔案列表
         left = tk.Frame(pane, bg=CARD,
                         highlightbackground=BORDER, highlightthickness=1)
         pane.add(left, weight=1)
@@ -140,29 +140,32 @@ class App(tk.Tk):
         self.file_listbox.pack(side="left", fill="both", expand=True)
         self.file_listbox.bind("<<ListboxSelect>>", lambda _: self._schedule_preview())
 
-        # 右側：預覽 + 設定
+        # 中欄：設定
+        mid = tk.Frame(pane, bg=BG)
+        pane.add(mid, weight=2)
+        self._build_settings_panel(mid)
+
+        # 右欄：即時預覽
         right = tk.Frame(pane, bg=BG)
         pane.add(right, weight=2)
-
         self._build_preview(right)
-        self._build_settings_panel(right)
 
     # ── 預覽區 ───────────────────────────────────────────────
 
     def _build_preview(self, parent):
         card = tk.Frame(parent, bg=CARD,
                         highlightbackground=BORDER, highlightthickness=1)
-        card.pack(fill="x", pady=(0, 8))
+        card.pack(fill="both", expand=True)
 
         tk.Label(card, text="即時預覽", bg=CARD, fg=MUTED,
                  font=(FONT, 8, "bold"), padx=10, pady=7).pack(anchor="w")
         tk.Frame(card, bg=BORDER, height=1).pack(fill="x")
 
         self._preview_canvas = tk.Canvas(
-            card, height=270, bg="#f0f0f0",
+            card, bg="#f0f0f0",
             highlightthickness=0, relief="flat",
         )
-        self._preview_canvas.pack(fill="x", padx=8, pady=8)
+        self._preview_canvas.pack(fill="both", expand=True, padx=8, pady=8)
         self._preview_canvas.bind("<Configure>", lambda _: self._schedule_preview())
         self._show_placeholder()
 
